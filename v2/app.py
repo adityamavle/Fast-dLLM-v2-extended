@@ -249,6 +249,15 @@ def create_chatbot_demo():
         )
         
         # HELPER FUNCTIONS
+        def convert_history_to_gradio_format(history_cache):
+            """Convert history from [[user, assistant], ...] to Gradio 6.0+ format"""
+            gradio_history = []
+            for user_msg, assistant_msg in history_cache:
+                gradio_history.append({"role": "user", "content": user_msg})
+                if assistant_msg:  # Only add assistant message if it exists
+                    gradio_history.append({"role": "assistant", "content": assistant_msg})
+            return gradio_history
+        
         def add_message(history, message, response):
             """Add a message pair to the history and return the updated history"""
             history = history.copy()
@@ -261,7 +270,7 @@ def create_chatbot_demo():
             if not message.strip():
                 # Return current state unchanged
                 history_cache_for_display = history_cache.copy()
-                return history_cache, history_cache_for_display, "", [], [], "wait for generation", "wait for generation"
+                return history_cache, convert_history_to_gradio_format(history_cache_for_display), "", [], [], "wait for generation", "wait for generation"
                 
             # Add user message to history
             history_cache = add_message(history_cache, message, None)
@@ -273,7 +282,7 @@ def create_chatbot_demo():
             message_out = ""
             
             # Return immediately to update UI with user message
-            return history_cache, history_cache_for_display, message_out, [], [], "processing...", "processing..."
+            return history_cache, convert_history_to_gradio_format(history_cache_for_display), message_out, [], [], "processing...", "processing..."
             
 
         
@@ -307,7 +316,7 @@ def create_chatbot_demo():
                     for item in generator:
                         if isinstance(item, list):  # Visualization state
                             states.append(item)
-                            yield history_cache, item, [], "", "processing...", "processing..."
+                            yield convert_history_to_gradio_format(history_cache), item, [], "", "processing...", "processing..."
                         else:  # Final text
                             cache_response_text = item
                             break
@@ -327,18 +336,18 @@ def create_chatbot_demo():
                 # Final yield with complete information and start slow motion visualization
                 if states:
                     # First, yield the final real-time state
-                    yield history_cache, states[-1], states[0], cache_response_text, cache_generation_time_str, cache_throughput_str
+                    yield convert_history_to_gradio_format(history_cache), states[-1], states[0], cache_response_text, cache_generation_time_str, cache_throughput_str
                     
                     # Then animate through slow motion visualization
                     for state in states[1:]:
                         time.sleep(visualization_delay)
-                        yield history_cache, states[-1], state, cache_response_text, cache_generation_time_str, cache_throughput_str
+                        yield convert_history_to_gradio_format(history_cache), states[-1], state, cache_response_text, cache_generation_time_str, cache_throughput_str
                     
             except Exception as e:
                 error_msg = f"Error: {str(e)}"
                 print(error_msg)
                 error_vis = [(error_msg, "red")]
-                yield history_cache, error_vis, error_vis, error_msg, "Error", "Error"
+                yield convert_history_to_gradio_format(history_cache), error_vis, error_vis, error_msg, "Error", "Error"
         
         def clear_conversation():
             """Clear the conversation history"""

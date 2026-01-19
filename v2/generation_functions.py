@@ -2,6 +2,8 @@ from typing import Callable, Optional, Union
 import torch
 import types
 from transformers.utils import auto_docstring, logging
+from skip import TokenSkipPolicy, LayerSkipPolicy, SkipStats
+from skip.model_hooks import apply_layer_skipping
 
 # Constants for Fast_dLLM model
 FAST_DLLM_MASK_ID = 151665
@@ -29,9 +31,36 @@ class Fast_dLLM_QwenForCausalLM:
         use_block_cache=False,
         top_p=0.95,
         temperature=0.0,
+        # Skip parameters
+        token_skip_enabled=False,
+        token_tau=0.99,
+        layer_skip_enabled=False,
+        layer_tau=0.99,
+        skip_stats=None,
     ):
         num_blocks = max_new_tokens // block_size + seq_len.max().item() // block_size
         batch_size = input_ids.shape[0]
+
+        # Initialize skip policies
+        token_policy = TokenSkipPolicy(tau_token=token_tau, enabled=token_skip_enabled)
+        layer_policy = LayerSkipPolicy(tau_layer=layer_tau, enabled=layer_skip_enabled)
+        
+        # Initialize stats if provided
+        if skip_stats is not None:
+            # Get layer count from model structure
+            if hasattr(self, 'model') and hasattr(self.model, 'layers'):
+                skip_stats.total_layers = len(self.model.layers)
+            elif hasattr(self, 'layers'):
+                skip_stats.total_layers = len(self.layers)
+            else:
+                skip_stats.total_layers = 32  # Default fallback
+            skip_stats.sequence_length = block_size
+            skip_stats.token_tau = token_tau if token_skip_enabled else 0.0
+            skip_stats.layer_tau = layer_tau if layer_skip_enabled else 0.0
+        
+        # Apply layer skipping hooks if enabled
+        if layer_skip_enabled:
+            apply_layer_skipping(self, layer_policy)
 
         if min_len > block_size:
             output = self.forward(input_ids=input_ids[:, :(min_len // block_size * block_size)], use_cache=True, update_past_key_values=True, block_size=block_size)
@@ -69,6 +98,11 @@ class Fast_dLLM_QwenForCausalLM:
             x_t = x_init.clone()
             step = 0
             block_past_key_values = None
+            
+            # Reset policies for new block
+            token_policy.reset()
+            layer_policy.reset()
+            
             while True:
                 mask_idx = (x_t[:, -block_size:] == mask_id)
                 if mask_idx.sum() == 0:
@@ -111,6 +145,23 @@ class Fast_dLLM_QwenForCausalLM:
                             logits = self.forward(input_ids=x_t[:, -block_size:], use_cache=True, past_key_values=past_key_values, update_past_key_values=False).logits
                             logits = torch.cat([logits[:, :1, :], logits[:, :-1, :]], dim=1)
                             logits = logits[:, start:end]
+                        
+                        # Update token policy hidden state cache
+                        if token_policy.enabled and skip_mask is not None:
+                            try:
+                                # Get final hidden states from forward (approximate with probe)
+                                token_policy.h_prev = h_probe.clone()
+                            except:
+                                pass
+                        
+                        # Record stats
+                        if skip_stats is not None:
+                            executed_layers = layer_policy.get_executed_count()
+                            if executed_layers == 0:
+                                # If no layers executed, use total layers
+                                executed_layers = skip_stats.total_layers
+                            skip_stats.record_step(active_tokens, executed_layers)
+                        
                         x_1, p_1t = self.sample_with_top_p(logits, top_p=top_p, temperature=temperature)
                         x1_p = torch.squeeze(torch.gather(p_1t, dim=-1, index=torch.unsqueeze(x_1, -1)), -1)
                         x1_p = torch.where(mask_idx[:, start:end], x1_p, -torch.inf)
@@ -180,11 +231,38 @@ class Fast_dLLM_QwenForCausalLM:
         stop_token=FAST_DLLM_STOP_TOKEN,
         temperature=0.0,
         top_p=0.95,
+        # Skip parameters
+        token_skip_enabled=False,
+        token_tau=0.99,
+        layer_skip_enabled=False,
+        layer_tau=0.99,
+        skip_stats=None,
     ):
         """
         MDM sampling function with visualization
         with intermediate state output for Gradio visualization
         """
+        # Initialize skip policies
+        token_policy = TokenSkipPolicy(tau_token=token_tau, enabled=token_skip_enabled)
+        layer_policy = LayerSkipPolicy(tau_layer=layer_tau, enabled=layer_skip_enabled)
+        
+        # Initialize stats if provided
+        if skip_stats is not None:
+            # Get layer count from model structure
+            if hasattr(self, 'model') and hasattr(self.model, 'layers'):
+                skip_stats.total_layers = len(self.model.layers)
+            elif hasattr(self, 'layers'):
+                skip_stats.total_layers = len(self.layers)
+            else:
+                skip_stats.total_layers = 32  # Default fallback
+            skip_stats.sequence_length = block_size
+            skip_stats.token_tau = token_tau if token_skip_enabled else 0.0
+            skip_stats.layer_tau = layer_tau if layer_skip_enabled else 0.0
+        
+        # Apply layer skipping hooks if enabled
+        if layer_skip_enabled:
+            apply_layer_skipping(self, layer_policy)
+        
         nfe = 0
         self.model.bd_size = block_size
         num_blocks = max_new_tokens // block_size
@@ -231,6 +309,10 @@ class Fast_dLLM_QwenForCausalLM:
             block_past_key_values = None
             step = 0
             
+            # Reset policies for new block
+            token_policy.reset()
+            layer_policy.reset()
+            
             while True:
                 if stop_token in x_t[:, prompt_length:]:
                     stop_token_idx = (x_t[:, prompt_length:] == stop_token).nonzero()[0][1]
@@ -266,9 +348,44 @@ class Fast_dLLM_QwenForCausalLM:
                             if (x_t[:, prompt_length:prompt_length+stop_token_idx] == mask_id).sum() == 0:
                                 break
 
+                        # TOKEN-LEVEL SKIPPING: Compute probe and skip mask
+                        active_tokens = x_t.shape[1]  # Default: all tokens active
+                        if token_policy.enabled:
+                            try:
+                                h_probe = token_policy.compute_probe_hidden(
+                                    self, x_t[:, -block_size:], past_key_values
+                                )
+                                skip_mask = token_policy.compute_skip_mask(
+                                    h_probe, token_policy.h_prev
+                                )
+                                active_tokens = (~skip_mask).sum().item()
+                            except Exception as e:
+                                # Fallback if probe computation fails
+                                skip_mask = None
+                                active_tokens = x_t.shape[1]
+                        else:
+                            skip_mask = None
+                        
+                        # Reset layer policy for this step
+                        layer_policy.reset()
+
                         logits = self.forward(input_ids=x_t[:, -block_size:], use_cache=True, past_key_values=past_key_values, update_past_key_values=False).logits
                         logits = torch.cat([logits[:, :1, :], logits[:, :-1, :]], dim=1)
                         logits = logits[:, start:end]
+                        
+                        # Update token policy hidden state cache
+                        if token_policy.enabled and skip_mask is not None:
+                            try:
+                                token_policy.h_prev = h_probe.clone()
+                            except:
+                                pass
+                        
+                        # Record stats
+                        if skip_stats is not None:
+                            executed_layers = layer_policy.get_executed_count()
+                            if executed_layers == 0:
+                                executed_layers = skip_stats.total_layers
+                            skip_stats.record_step(active_tokens, executed_layers)
                             
                         step += 1
                         x_1, p_1t = self.sample_with_top_p(logits, top_p=top_p, temperature=temperature)

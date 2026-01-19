@@ -36,6 +36,7 @@ import json
 import time
 import types
 import generation_functions
+from skip import SkipStats
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -60,6 +61,12 @@ class Fast_dLLM_v2EvalHarness(LM):
         small_block_size=8,
         bd_size=32,
         threshold=0.9,
+        # Skip parameters
+        token_skip=False,
+        token_tau=0.99,
+        layer_skip=False,
+        layer_tau=0.99,
+        skip_stats_path=None,
         **kwargs,
     ):
 
@@ -107,6 +114,16 @@ class Fast_dLLM_v2EvalHarness(LM):
         self.small_block_size = small_block_size
         self.threshold = threshold
         self.bd_size = bd_size
+        
+        # Skip parameters
+        self.token_skip = token_skip
+        self.token_tau = token_tau
+        self.layer_skip = layer_skip
+        self.layer_tau = layer_tau
+        self.skip_stats_path = skip_stats_path
+        
+        # Initialize stats collector
+        self.skip_stats = None
 
     @property
     def rank(self):
@@ -208,6 +225,12 @@ class Fast_dLLM_v2EvalHarness(LM):
         output = [None] * len(requests)  # pre-allocate output list
         num_tokens = 0
         
+        # Initialize stats for this evaluation run
+        self.skip_stats = SkipStats(
+            token_tau=self.token_tau if self.token_skip else 0.0,
+            layer_tau=self.layer_tau if self.layer_skip else 0.0,
+        )
+        
         start_time = time.time()
         
         requests_with_indices = [(i, req) for i, req in enumerate(requests)]
@@ -261,6 +284,12 @@ class Fast_dLLM_v2EvalHarness(LM):
                         seq_len=torch.tensor(seq_len, device=self.device),
                         use_block_cache=self.use_block_cache,
                         threshold=self.threshold,
+                        # Skip parameters
+                        token_skip_enabled=self.token_skip,
+                        token_tau=self.token_tau,
+                        layer_skip_enabled=self.layer_skip,
+                        layer_tau=self.layer_tau,
+                        skip_stats=self.skip_stats,
                     )
                 else:
                     generated_ids = self.model.mdm_sample(
@@ -274,6 +303,12 @@ class Fast_dLLM_v2EvalHarness(LM):
                         seq_len=torch.tensor(seq_len, device=self.device),
                         use_block_cache=self.use_block_cache,
                         threshold=self.threshold,
+                        # Skip parameters
+                        token_skip_enabled=self.token_skip,
+                        token_tau=self.token_tau,
+                        layer_skip_enabled=self.layer_skip,
+                        layer_tau=self.layer_tau,
+                        skip_stats=self.skip_stats,
                     )
             
             # extract new generated tokens, and keep original index order
@@ -300,6 +335,12 @@ class Fast_dLLM_v2EvalHarness(LM):
             print(f"Total number of tokens generated: {num_tokens}")
             print(f"Total time taken: {end_time - start_time} seconds")
             print(f"Tokens per second: {num_tokens / (end_time - start_time)}")
+        
+        # Save stats if path provided
+        if self.skip_stats_path and self.skip_stats is not None:
+            self.skip_stats.save_jsonl(self.skip_stats_path)
+            if self.skip_stats.total_steps > 0:
+                print(f"FLOPs reduction: {self.skip_stats.compute_flops_reduction():.4f}")
             
         return output
 

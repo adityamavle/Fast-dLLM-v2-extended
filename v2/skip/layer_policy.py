@@ -7,29 +7,42 @@ class LayerSkipPolicy:
     def __init__(self, tau_layer=0.99, enabled=True):
         self.tau_layer = tau_layer
         self.enabled = enabled
-        self.x_prev_in = None  # Previous layer input
+        self.x_prev_in = None  # Previous layer's INPUT (not output) - for input-to-input comparison
         self.executed_layers = []  # Track which layers executed vs skipped
+        self.consecutive_skips = 0  # Track consecutive skips to prevent cascade
         
     def reset(self):
         """Reset state between forward passes"""
         self.x_prev_in = None
         self.executed_layers = []
+        self.consecutive_skips = 0
     
     def should_skip_layer(self, x_in):
         """
-        Decide if current layer should be skipped
-        Returns: (should_skip: bool, similarity: float)
+        Decide if current layer should be skipped by comparing input-to-input.
+        
+        Compares Layer L's INPUT to Layer L-1's INPUT (stored in x_prev_in).
+        This matches the task requirement: "Compute the cosine similarity of the 
+        input hidden states between adjacent layers within the same denoising step."
+        
+        Args:
+            x_in: Current layer's input hidden states [B, S, H]
+            
+        Returns:
+            (should_skip: bool, similarity: float)
         """
         if self.x_prev_in is None or not self.enabled:
-            self.x_prev_in = x_in.clone() if isinstance(x_in, torch.Tensor) else x_in
+            # First layer: no previous input to compare, so don't skip
+            # x_prev_in will be updated in forward_with_skip after processing
             return False, 0.0
         
         # Ensure same shape
         if x_in.shape != self.x_prev_in.shape:
-            self.x_prev_in = x_in.clone() if isinstance(x_in, torch.Tensor) else x_in
+            # Shape mismatch: don't skip, x_prev_in will be updated in forward_with_skip
             return False, 0.0
         
         # Compute mean cosine similarity across tokens
+        # Compare current layer's INPUT to previous layer's INPUT
         x_in_norm = F.normalize(x_in, p=2, dim=-1)  # [B, S, H]
         x_prev_norm = F.normalize(self.x_prev_in, p=2, dim=-1)
         
@@ -39,8 +52,8 @@ class LayerSkipPolicy:
         
         should_skip = mean_sim >= self.tau_layer
         
-        # Update x_prev_in for next layer
-        self.x_prev_in = x_in.clone() if isinstance(x_in, torch.Tensor) else x_in
+        # NOTE: x_prev_in is updated in forward_with_skip() to the current layer's INPUT
+        # (not output) after processing, ensuring we always compare input-to-input
         
         return should_skip, mean_sim
     

@@ -8,11 +8,13 @@ class TokenSkipPolicy:
         self.tau_token = tau_token
         self.enabled = enabled
         self.probe_layer_idx = probe_layer_idx
-        self.h_prev = None  # Previous step hidden states [B, S, H]
+        self.h_prev = None  # Previous step probe hidden states [B, S, H] (after first layer)
+        self.h_prev_final = None  # Previous step final hidden states [B, S, H] (after all layers)
         
     def reset(self):
         """Reset state between sequences"""
         self.h_prev = None
+        self.h_prev_final = None
     
     def compute_probe_hidden(self, model, input_ids, past_key_values=None):
         """
@@ -104,19 +106,98 @@ class TokenSkipPolicy:
         device = packed_hidden.device
         
         # Initialize output with previous hidden states for skipped tokens
-        output = torch.zeros(B, S, H, device=device, dtype=packed_hidden.dtype)
+        if self.h_prev is not None and self.h_prev.shape == (B, S, H):
+            output = self.h_prev.clone()
+        else:
+            output = torch.zeros(B, S, H, device=device, dtype=packed_hidden.dtype)
         
-        # Scatter active tokens
+        # Scatter active tokens (overwrite skipped tokens where active)
         if len(active_indices) > 0:
             batch_idx = active_indices[:, 0]
             seq_idx = active_indices[:, 1]
             output[batch_idx, seq_idx] = packed_hidden
         
-        # For skipped tokens, use previous hidden states
-        if self.h_prev is not None:
-            # Ensure same shape
-            min_seq = min(S, self.h_prev.shape[1])
-            output[skip_mask[:, :min_seq]] = self.h_prev[:, :min_seq][skip_mask[:, :min_seq]]
+        return output
+    
+    def merge_skipped_tokens(self, h_current, skip_mask, h_prev_final=None):
+        """
+        Merge current hidden states with previous hidden states for skipped tokens.
+        This is called after the full forward pass to replace skipped tokens.
+        
+        Args:
+            h_current: Current hidden states [B, S, H] (after full forward pass)
+            skip_mask: Boolean mask [B, S], True = skip
+            h_prev_final: Previous step's final hidden states [B, S, H] (optional, uses h_prev if None)
+            
+        Returns:
+            merged_hidden: [B, S, H] with skipped tokens replaced
+        """
+        if not self.enabled or skip_mask is None or not skip_mask.any():
+            return h_current
+        
+        output = h_current.clone()
+        
+        # Use provided h_prev_final or fall back to h_prev (probe from previous step)
+        h_prev_to_use = h_prev_final if h_prev_final is not None else self.h_prev
+        
+        if h_prev_to_use is not None:
+            B, S, H = h_current.shape
+            min_seq = min(S, h_prev_to_use.shape[1])
+            
+            # Replace skipped tokens with previous hidden states
+            # Only replace where skip_mask is True
+            output[:, :min_seq][skip_mask[:, :min_seq]] = h_prev_to_use[:, :min_seq][skip_mask[:, :min_seq]]
         
         return output
+    
+    def apply_token_skipping_to_logits(self, model, logits, skip_mask):
+        """
+        For skipped tokens, replace logits with logits computed from previous hidden states.
+        This implements the "reuse previous outputs" behavior.
+        
+        Args:
+            model: The model instance (to compute logits from hidden states)
+            logits: Current logits [B, S, V]
+            skip_mask: Boolean mask [B, S], True = skip
+            
+        Returns:
+            logits: [B, S, V] with skipped token logits replaced
+        """
+        if not self.enabled or skip_mask is None or not skip_mask.any():
+            return logits
+        
+        # If we have previous final hidden states, compute logits from them for skipped tokens
+        if self.h_prev_final is not None:
+            try:
+                # Get the language model head
+                if hasattr(model, 'lm_head'):
+                    lm_head = model.lm_head
+                elif hasattr(model, 'model') and hasattr(model.model, 'embed_tokens'):
+                    # For models with tied embeddings, use embed_tokens weight
+                    lm_head_weight = model.model.embed_tokens.weight
+                else:
+                    return logits
+                
+                # Compute logits from previous hidden states for skipped tokens
+                B, S, V = logits.shape
+                min_seq = min(S, self.h_prev_final.shape[1])
+                
+                # Get previous logits for skipped positions
+                if hasattr(model, 'lm_head'):
+                    prev_logits = lm_head(self.h_prev_final[:, :min_seq])  # [B, min_seq, V]
+                else:
+                    prev_logits = torch.nn.functional.linear(
+                        self.h_prev_final[:, :min_seq], lm_head_weight
+                    )
+                
+                # Replace logits for skipped tokens
+                output_logits = logits.clone()
+                output_logits[:, :min_seq][skip_mask[:, :min_seq]] = prev_logits[skip_mask[:, :min_seq]]
+                
+                return output_logits
+            except Exception:
+                # If anything fails, return original logits
+                return logits
+        
+        return logits
 

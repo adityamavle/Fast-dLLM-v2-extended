@@ -158,6 +158,10 @@ Results identical to token-only (layer_tau=0.99 doesn't skip).
 
 ### 5.2 Accuracy vs. FLOPs Reduction Curves
 
+![Accuracy vs FLOPs Reduction](results/gsm8k_tradeoff_1.png)
+
+**Key Observations:**
+
 1. **Token-level skipping (Blue):** Flat line at 50% accuracy with 56% FLOPs reduction. All thresholds collapse to same point.
 
 2. **Layer-level skipping (Red):** Dramatic cliff at τ=0.95 (0% accuracy), narrow plateau at τ=0.97 (60% accuracy, 0.68% reduction), no effect at τ=0.99.
@@ -170,33 +174,33 @@ With statistically meaningful sample size (standard error ±0.05), results confi
 
 #### Baseline Performance
 
-|| Configuration | Accuracy | FLOPs Reduction |
-||---------------|----------|-----------------|
-|| Baseline (no skip) | 0.630 | 0.0% |
+| Configuration | Accuracy | FLOPs Reduction |
+|---------------|----------|-----------------|
+| Baseline (no skip) | 0.630 | 0.0% |
 
 #### Token-Level Skipping Results
 
-|| Threshold (τ_token) | Accuracy | FLOPs Reduction |
-||---------------------|----------|-----------------|
-|| 0.97 | 0.630 | 57.81% |
-|| 0.99 | 0.630 | 57.81% |
+| Threshold (τ_token) | Accuracy | FLOPs Reduction |
+|---------------------|----------|-----------------|
+| 0.97 | 0.630 | 57.81% |
+| 0.99 | 0.630 | 57.81% |
 
 Confirms token skipping maintains accuracy while achieving ~58% FLOPs reduction. Thresholds collapse to identical performance.
 
 #### Layer-Level Skipping Results
 
-|| Threshold (τ_layer) | Accuracy | FLOPs Reduction |
-||---------------------|----------|-----------------|
-|| 0.97 | 0.630 | 0.64% |
-|| 0.99 | 0.630 | 0.0% |
+| Threshold (τ_layer) | Accuracy | FLOPs Reduction |
+|---------------------|----------|-----------------|
+| 0.97 | 0.630 | 0.64% |
+| 0.99 | 0.630 | 0.0% |
 
 Layer skipping achieves minimal FLOPs reduction (< 1%) at conservative thresholds while maintaining accuracy.
 
 #### Combined Skipping Results
 
-|| Configuration | Accuracy | FLOPs Reduction |
-||---------------|----------|-----------------|
-|| Combined (τ_token=0.97, τ_layer=0.97) | 0.630 | 59.46% |
+| Configuration | Accuracy | FLOPs Reduction |
+|---------------|----------|-----------------|
+| Combined (τ_token=0.97, τ_layer=0.97) | 0.630 | 59.46% |
 
 Combined approach achieves ~59% FLOPs reduction with zero accuracy loss, primarily driven by token-level skipping.
 

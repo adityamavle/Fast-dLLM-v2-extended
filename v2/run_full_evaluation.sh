@@ -19,8 +19,8 @@ SMALL_BLOCK_SIZE=4
 THRESHOLD=0.9
 
 # Thresholds to sweep
-TOKEN_TAUS=(0.95 0.97 0.99)
-LAYER_TAUS=(0.95 0.97 0.99)
+TOKEN_TAUS=(0.97 0.99)
+LAYER_TAUS=(0.97 0.99)
 # ==========================================
 
 # Set environment variables

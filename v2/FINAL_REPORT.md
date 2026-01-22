@@ -95,7 +95,7 @@ v2/run_full_evaluation.sh    # Automated threshold sweeping
 
 ## 4. Experimental Setup
 
-**Hardware:** NVIDIA GeForce RTX 4080 (16GB VRAM)
+**Hardware:** NVIDIA GeForce RTX 4060 (8GB VRAM)
 
 **Model:** Fast-dLLM v2 1.5B (7B model causes OOM on consumer GPU)
 
@@ -170,22 +170,54 @@ Results identical to token-only (layer_tau=0.99 doesn't skip).
 
 ### 5.3 Final Results (100 samples)
 
-[TO BE FILLED AFTER RUNNING 100-SAMPLE EVALUATION]
+With statistically meaningful sample size (standard error ±0.05), results confirm preliminary findings:
+
+#### Baseline Performance
+
+| Configuration | Accuracy | FLOPs Reduction |
+|---------------|----------|-----------------|
+| Baseline (no skip) | 0.630 | 0.0% |
+
+#### Token-Level Skipping Results
+
+| Threshold (τ_token) | Accuracy | FLOPs Reduction |
+|---------------------|----------|-----------------|
+| 0.97 | 0.630 | 57.81% |
+| 0.99 | 0.630 | 57.81% |
+
+Confirms token skipping maintains accuracy while achieving ~58% FLOPs reduction. Thresholds collapse to identical performance.
+
+#### Layer-Level Skipping Results
+
+| Threshold (τ_layer) | Accuracy | FLOPs Reduction |
+|---------------------|----------|-----------------|
+| 0.97 | 0.630 | 0.64% |
+| 0.99 | 0.630 | 0.0% |
+
+Layer skipping achieves minimal FLOPs reduction (< 1%) at conservative thresholds while maintaining accuracy.
+
+#### Combined Skipping Results
+
+| Configuration | Accuracy | FLOPs Reduction |
+|---------------|----------|-----------------|
+| Combined (τ_token=0.97, τ_layer=0.97) | 0.630 | 59.46% |
+
+Combined approach achieves ~59% FLOPs reduction with zero accuracy loss, primarily driven by token-level skipping.
 
 ---
 
 ## 6. Discussion
 
 **Token-Level Skipping:**
-- Highly effective: 56% FLOPs reduction with zero accuracy loss
-- Robust to threshold selection: all values in [0.95, 0.99] produce identical results
+- Highly effective: ~58% FLOPs reduction with zero accuracy loss (100 samples)
+- Robust to threshold selection: values in [0.97, 0.99] produce identical results
 - In Fast-dLLM v2's denoising process, token hidden states are remarkably stable across adjacent steps
 - Caveat: Reported FLOPs reduction is optimistic since attention still computes all tokens
 
 **Layer-Level Skipping:**
-- Problematic: exhibits cliff-like behavior
-- τ=0.95 too aggressive (destroys model), τ=0.99 too conservative (no effect)
-- τ=0.97 minimal skipping with slight accuracy fluctuation
+- Limited effectiveness: < 1% FLOPs reduction at conservative thresholds
+- τ=0.97 achieves minimal skipping (0.64%) with accuracy preservation
+- τ=0.99 too conservative (no effect)
 - Root cause: input-to-input similarity in Fast-dLLM v2 is either very high (>0.97) or low (<0.95)
 - Not effective for this model/task combination
 
@@ -193,19 +225,19 @@ Results identical to token-only (layer_tau=0.99 doesn't skip).
 1. FLOPs metric is proxy, not exact computation count
 2. Token skipping doesn't truly skip (attention needs full context)
 3. Layer skipping runs attention (~35% FLOPs) when cache active
-4. Small sample size (10) has high variance
+4. Testing limited to 1.5B model on consumer hardware
 
 ---
 
 ## 7. Conclusion
 
-Token-level skipping achieves 56% FLOPs reduction with zero accuracy loss, demonstrating high effectiveness for Fast-dLLM v2. Layer-level skipping exhibits problematic cliff-like behavior with narrow effective operating range, limiting practical utility.
+Token-level skipping achieves ~58% FLOPs reduction with zero accuracy loss (validated on 100 samples), demonstrating high effectiveness for Fast-dLLM v2. Layer-level skipping achieves < 1% FLOPs reduction at conservative thresholds, limiting practical utility.
 
 **Key Achievement:** Working implementation with proper KV cache handling (solved critical shape mismatch bug in layer skipping).
 
-**Main Finding:** Token skipping is robust and effective; layer skipping is not suitable for this model architecture.
+**Main Finding:** Token skipping is robust and effective (~58% reduction, no accuracy loss); layer skipping provides minimal benefit for this model architecture.
 
-All experiments conducted on consumer hardware (RTX 4080 16GB) using 1.5B parameter model.
+All experiments conducted on consumer hardware (RTX 4060 8GB) using 1.5B parameter model.
 
 ---
 

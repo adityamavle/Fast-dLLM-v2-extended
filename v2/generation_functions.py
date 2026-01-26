@@ -55,6 +55,7 @@ class Fast_dLLM_QwenForCausalLM:
             else:
                 skip_stats.total_layers = 32  # fallback
             skip_stats.sequence_length = block_size
+            skip_stats.batch_size = batch_size  # NEW: Pass batch_size for FLOPs normalization
             skip_stats.token_tau = token_tau if token_skip_enabled else 0.0
             skip_stats.layer_tau = layer_tau if layer_skip_enabled else 0.0
 
@@ -180,10 +181,17 @@ class Fast_dLLM_QwenForCausalLM:
                         layer_policy.reset()
 
                         # --- forward path with token skipping ---
-                        # If token skipping is enabled and we have a skip_mask, we need to handle it
-                        # Note: We still process all tokens (attention needs full context), but we track
-                        # skipped tokens for FLOPs calculation and can optionally replace their outputs
+                        # Token skipping is implemented by:
+                        # 1. Passing skip_mask to layer_policy (accessed by hooks)
+                        # 2. Layer hooks check skip_mask and skip computation for masked tokens
+                        # 3. Skipped tokens use previous layer's hidden states (identity skip)
                         use_token_skip = token_policy.enabled and skip_mask is not None and skip_mask.any()
+                        
+                        # Store skip_mask in layer_policy for hooks to use
+                        if use_token_skip:
+                            layer_policy.token_skip_mask = skip_mask.clone()
+                        else:
+                            layer_policy.token_skip_mask = None
                         
                         if use_block_cache:
                             if block_past_key_values is None or (x_t[:, -block_size + small_block_start_idx] == mask_id).any():

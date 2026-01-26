@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Optional
 
 def wrap_layer_with_skipping(layer, layer_idx, layer_policy):
-    """Wrap a transformer layer to support skipping"""
+    """Wrap a transformer layer to support both layer-level and token-level skipping"""
     if layer_policy is None or not layer_policy.enabled:
         return layer
     
@@ -31,6 +31,9 @@ def wrap_layer_with_skipping(layer, layer_idx, layer_policy):
         MAX_CONSECUTIVE_SKIPS = 3
         if should_skip and layer_policy.consecutive_skips >= MAX_CONSECUTIVE_SKIPS:
             should_skip = False
+        
+        # Token-level skipping: check if model has token_skip_mask set by generation loop
+        token_skip_mask = getattr(layer_policy, 'token_skip_mask', None)
         
         if should_skip:
             layer_policy.record_layer_execution(layer_idx, False)
@@ -88,6 +91,46 @@ def wrap_layer_with_skipping(layer, layer_idx, layer_policy):
             layer_policy.x_prev_in = current_input
             
             return output
+        
+        # Layer not skipped, but check for token-level skipping
+        elif token_skip_mask is not None and token_skip_mask.any():
+            # Token-level skipping: Skip computation for certain tokens in this layer
+            # Implementation: Run forward on all tokens (for attention context), but 
+            # replace skipped token outputs with previous hidden states
+            layer_policy.record_layer_execution(layer_idx, True)
+            layer_policy.consecutive_skips = 0
+            
+            # Run full forward pass first (needed for attention context)
+            result = original_forward(hidden_states, *args, **kwargs)
+            
+            # Get output hidden states (could be tuple or tensor)
+            if isinstance(result, tuple):
+                output_hidden_states = result[0]
+                other_outputs = result[1:]
+            else:
+                output_hidden_states = result
+                other_outputs = ()
+            
+            # Apply token-level skipping: replace skipped token outputs with previous hidden states
+            if hasattr(layer_policy, 'h_prev_token_skip') and layer_policy.h_prev_token_skip is not None:
+                h_prev = layer_policy.h_prev_token_skip
+                # Align shapes and apply skip mask
+                B, S, H = output_hidden_states.shape
+                if h_prev.shape == (B, S, H):
+                    output_hidden_states = torch.where(
+                        token_skip_mask.unsqueeze(-1),  # [B, S, 1]
+                        h_prev,
+                        output_hidden_states
+                    )
+            
+            # Store current output for next token-level skip
+            layer_policy.h_prev_token_skip = output_hidden_states.clone()
+            
+            # Return result in original format
+            if other_outputs:
+                return (output_hidden_states, *other_outputs)
+            else:
+                return output_hidden_states
         else:
             layer_policy.record_layer_execution(layer_idx, True)
             layer_policy.consecutive_skips = 0  # Reset consecutive skips counter
@@ -95,6 +138,13 @@ def wrap_layer_with_skipping(layer, layer_idx, layer_policy):
             # Update x_prev_in to current INPUT (not output) for next layer's comparison
             # This ensures we always compare input-to-input between adjacent layers
             layer_policy.x_prev_in = current_input
+            
+            # Store hidden states for token-level skipping
+            if isinstance(result, tuple):
+                layer_policy.h_prev_token_skip = result[0].clone()
+            else:
+                layer_policy.h_prev_token_skip = result.clone()
+            
             return result
     
     layer.forward = forward_with_skip

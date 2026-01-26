@@ -1,0 +1,7 @@
+{"task": "gsm8k", "method": "baseline", "token_tau": 0.0, "layer_tau": 0.0, "accuracy": 0.80, "flops_reduction": 0.0}
+{"task": "gsm8k", "method": "token_skip", "token_tau": 0.90, "layer_tau": 0.0, "accuracy": 0.79, "flops_reduction": 0.7654835261569417}
+{"task": "gsm8k", "method": "token_skip", "token_tau": 0.97, "layer_tau": 0.0, "accuracy": 0.80, "flops_reduction": 0.7654835261569417}
+{"task": "gsm8k", "method": "token_skip", "token_tau": 0.99, "layer_tau": 0.0, "accuracy": 0.80, "flops_reduction": 0.7654835261569417}
+{"task": "gsm8k", "method": "layer_skip", "token_tau": 0.0, "layer_tau": 0.90, "accuracy": 0.78, "flops_reduction": 0.36}
+{"task": "gsm8k", "method": "layer_skip", "token_tau": 0.0, "layer_tau": 0.97, "accuracy": 0.78, "flops_reduction": 0.36}
+{"task": "gsm8k", "method": "layer_skip", "token_tau": 0.0, "layer_tau": 0.99, "accuracy": 0.80, "flops_reduction": 0.10}

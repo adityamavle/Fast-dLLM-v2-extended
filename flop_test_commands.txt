@@ -1,0 +1,8 @@
+# Baseline (5-shot, 60 examples)
+accelerate launch eval.py --tasks gsm8k --batch_size 32 --num_fewshot 5 --confirm_run_unsafe_code --model fast_dllm_v2 --fewshot_as_multiturn --apply_chat_template --model_args model_path=Efficient-Large-Model/Fast_dLLM_v2_7B,threshold=1,show_speed=True --output_path results/baseline_5shot_60 --limit 60
+
+# Token Skipping (tau=0.97, 5-shot, 60 examples)
+accelerate launch eval.py --tasks gsm8k --batch_size 32 --num_fewshot 5 --confirm_run_unsafe_code --model fast_dllm_v2 --fewshot_as_multiturn --apply_chat_template --model_args model_path=Efficient-Large-Model/Fast_dLLM_v2_7B,threshold=1,show_speed=True,token_skip=True,token_tau=0.97,layer_skip=False,skip_stats_path=results/flops_stats/token_5shot_60.jsonl --output_path results/token_5shot_60 --limit 60
+
+# Layer Skipping (tau=0.97, 5-shot, 60 examples)
+accelerate launch eval.py --tasks gsm8k --batch_size 32 --num_fewshot 5 --confirm_run_unsafe_code --model fast_dllm_v2 --fewshot_as_multiturn --apply_chat_template --model_args model_path=Efficient-Large-Model/Fast_dLLM_v2_7B,threshold=1,show_speed=True,token_skip=False,layer_skip=True,layer_tau=0.97,skip_stats_path=results/flops_stats/layer_5shot_60.jsonl --output_path results/layer_5shot_60 --limit 60
